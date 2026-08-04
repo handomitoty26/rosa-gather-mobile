@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#172033">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>ROSA 모임정산</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css?v=201">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="./icon.svg" alt="" class="brand-icon">
+        <div><strong>ROSA</strong><span>Gather Ledger</span></div>
+      </div>
+      <nav class="side-nav" aria-label="주 메뉴">
+        <button data-page="dashboard" class="nav-item active"><span>⌂</span>홈</button>
+        <button data-page="members" class="nav-item"><span>👥</span>회원</button>
+        <button data-page="fees" class="nav-item"><span>₩</span>회비</button>
+        <button data-page="event" class="nav-item"><span>☀</span>모임 설정</button>
+        <button data-page="records" class="nav-item"><span>🧾</span>이용 기록</button>
+        <button data-page="settlement" class="nav-item"><span>✓</span>정산</button>
+        <button data-page="report" class="nav-item"><span>▤</span>보고서</button>
+        <button data-page="backup" class="nav-item"><span>⤓</span>백업·설정</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="syncBadge" class="sync-badge">연결 확인 중</div>
+        <small>v2.0.1 휴대폰 단독 앱</small>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="pageEyebrow">ROSA Gather Ledger</p>
+          <h1 id="pageTitle">홈</h1>
+        </div>
+        <div class="top-actions">
+          <label class="event-select-wrap">
+            <span>현재 모임</span>
+            <select id="eventSelector" aria-label="현재 모임 선택"></select>
+          </label>
+          <button id="installTopBtn" class="btn" >앱 설치</button><button id="quickAddBtn" class="btn btn-primary">＋ 이용 기록</button>
+        </div>
+      </header>
+      <main id="content" class="content" tabindex="-1"></main>
+    </section>
+  </div>
+
+  <nav class="mobile-nav" aria-label="모바일 메뉴">
+    <button data-page="dashboard" class="active"><span>⌂</span>홈</button>
+    <button data-page="fees"><span>₩</span>회비</button>
+    <button data-page="event"><span>☀</span>모임</button>
+    <button id="mobileAddBtn" class="mobile-add"><span>＋</span>기록</button>
+    <button data-page="settlement"><span>✓</span>정산</button>
+    <button data-page="report"><span>▤</span>보고서</button>
+  </nav>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+  <input type="file" id="jsonImportInput" accept=".rosa,.json,application/json,application/x-rosa-gather+json" hidden>
+
+  <script src="./app.js?v=201" defer></script>
+</body>
+</html>

@@ -444,7 +444,7 @@ function renderDashboard() {
       <p class="eyebrow">${e.year} ${seasonName(e.season)} GATHERING</p>
       <h2>${esc(e.title)}</h2>
       <p>${dateText(e.startDate)} ~ ${dateText(e.endDate)} · ${esc(e.location || '장소를 입력해 주세요')}<br>지출 건마다 실제 이용자를 선택하고 영수증과 현장 사진을 함께 남기세요.</p>
-      <div class="hero-actions"><button class="btn btn-primary" data-action="add-record">＋ 이용 기록 추가</button><button class="btn" data-page-jump="event">모임·참석자 설정</button><button class="btn" data-page-jump="report">보고서 보기</button></div>
+      <div class="hero-actions"><button class="btn btn-primary" data-action="add-record">＋ 이용 기록 추가</button><button class="btn" data-page-jump="event">모임·참석자 설정</button><button class="btn" data-page-jump="report">보고서 보기</button><button class="btn" data-page-jump="backup">백업·설정</button></div>
     </section>
     <section class="grid grid-4 section-gap">
       <div class="card stat"><div class="stat-label">전체 지출</div><div class="stat-value">${money(calc.totalExpense)}</div><div class="stat-sub">${recs.filter(r=>Number(r.amount)>0).length}건</div></div>

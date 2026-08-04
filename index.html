@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
-  <link rel="stylesheet" href="./styles.css?v=201">
+  <link rel="stylesheet" href="./styles.css?v=202">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -32,7 +32,7 @@
       </nav>
       <div class="sidebar-footer">
         <div id="syncBadge" class="sync-badge">연결 확인 중</div>
-        <small>v2.0.1 휴대폰 단독 앱</small>
+        <small>v2.0.2 백업·설정 메뉴 수정판</small>
       </div>
     </aside>
 
@@ -61,12 +61,13 @@
     <button id="mobileAddBtn" class="mobile-add"><span>＋</span>기록</button>
     <button data-page="settlement"><span>✓</span>정산</button>
     <button data-page="report"><span>▤</span>보고서</button>
+    <button data-page="backup"><span>⚙</span>설정</button>
   </nav>
 
   <div id="modalRoot"></div>
   <div id="toastRoot" class="toast-root" aria-live="polite"></div>
   <input type="file" id="jsonImportInput" accept=".rosa,.json,application/json,application/x-rosa-gather+json" hidden>
 
-  <script src="./app.js?v=201" defer></script>
+  <script src="./app.js?v=202" defer></script>
 </body>
 </html>

@@ -59,7 +59,7 @@ function mobileInitialState() {
     settings: { clubName:'우리 모임', monthlyFee:20000, openingBalance:0, settlementRounding:1 },
     members: [],
     events: [{
-      id:eventId, year:now.getFullYear(), season,
+      id:eventId, year:now.getFullYear(), season, type:'regular',
       title:`${now.getFullYear()}년 ${season==='summer'?'하계':'동계'} 모임`,
       startDate:dateStr(now), endDate:dateStr(end), location:'', status:'preparing',
       attendeeIds:[], lodgerIds:[], notes:'', createdAt:new Date().toISOString(),
@@ -244,7 +244,7 @@ function toast(message, type = '') {
 function normalizeState() {
   state.settings ||= { clubName:'우리 모임', monthlyFee:20000, openingBalance:0, settlementRounding:1 };
   state.members ||= []; state.events ||= []; state.records ||= []; state.fees ||= []; state.fundTransactions ||= []; state.attachments ||= [];
-  state.events.forEach(e=>{ e.attendeeIds ||= []; e.lodgerIds ||= []; });
+  state.events.forEach(e=>{ e.attendeeIds ||= []; e.lodgerIds ||= []; e.type ||= 'regular'; });
   state.records.forEach(r=>{ r.participantIds ||= []; r.receiptIds ||= []; r.photoIds ||= []; });
   state.fees.forEach(f=>{ f.status ||= 'paid'; f.method ||= 'auto'; f.memo ||= ''; f.statusMemo ||= ''; });
   if (!state.currentEventId && state.events[0]) state.currentEventId = state.events[0].id;
@@ -298,8 +298,15 @@ function memberNames(ids = []) { return ids.map(id => member(id)?.name).filter(B
 function getFee(year, month, memberId) { return state.fees.find(f => Number(f.year) === Number(year) && Number(f.month) === Number(month) && f.memberId === memberId); }
 function feeMethodLabel(method) { return FEE_METHOD[method] || FEE_METHOD.other; }
 function seasonName(s) { return s === 'summer' ? '하계' : '동계'; }
+// 정기모임(하계/동계)은 "OO 모임", 번개모임은 season 값이 없어도 안전하게 "번개모임"으로 표시.
+function eventTypeLabel(event) {
+  if (!event) return '';
+  return event.type === 'flash' ? '번개모임' : `${seasonName(event.season)} 모임`;
+}
 function feePeriodForEvent(event = currentEvent()) {
   if (!event) return [];
+  // 번개모임은 반년치 정회비 기간 개념 자체가 없다 — 그날 쓴 돈만 인원수대로 나눈다.
+  if (event.type === 'flash') return [];
   const eventYear = Number(event.year) || new Date().getFullYear();
   if (event.season !== 'winter') {
     return [2,3,4,5,6,7].map(month => ({year:eventYear, month}));
@@ -319,6 +326,7 @@ function feePeriodForEvent(event = currentEvent()) {
     .concat([{year:periodStartYear + 1, month:1}]);
 }
 function feePeriodLabel(event = currentEvent()) {
+  if (event?.type === 'flash') return '번개모임(회비 정산 대상 아님)';
   const period = feePeriodForEvent(event);
   if (!period.length) return '-';
   const first = period[0], last = period[period.length - 1];
@@ -355,12 +363,15 @@ function distribute(amount, ids) {
 }
 
 function calculateSettlement(event = currentEvent()) {
+  // 번개모임은 반년 회비·공동회비 정산과 완전히 분리한다 — 회원 유형과 무관하게
+  // 전원 "그날 쓴 돈 - 선결제액"만으로 정산한다(모임별 정산 회원과 같은 공식).
+  const isFlash = event?.type === 'flash';
   const rows = {};
   const eventMemberIds = new Set(event?.attendeeIds || []);
   state.members.forEach(m => {
     if (eventMemberIds.has(m.id)) rows[m.id] = {
       id:m.id, name:m.name, type:m.type, used:0, personalDue:0,
-      feePaid:m.type === 'monthly' ? paidFeeForMember(event, m.id) : 0,
+      feePaid:(!isFlash && m.type === 'monthly') ? paidFeeForMember(event, m.id) : 0,
       advanced:0, net:0,
     };
   });
@@ -377,22 +388,23 @@ function calculateSettlement(event = currentEvent()) {
         const m = member(id);
         if (m) rows[id] = {
           id, name:m.name, type:m.type, used:0, personalDue:0,
-          feePaid:m.type === 'monthly' ? paidFeeForMember(event, id) : 0,
+          feePaid:(!isFlash && m.type === 'monthly') ? paidFeeForMember(event, id) : 0,
           advanced:0, net:0,
         };
       }
       if (!rows[id]) return;
       rows[id].used += share;
-      if (rows[id].type === 'monthly') commonBurden += share;
+      if (!isFlash && rows[id].type === 'monthly') commonBurden += share;
       else rows[id].personalDue += share;
     });
     if (r.paymentSource === 'personal' && r.payerId && rows[r.payerId]) rows[r.payerId].advanced += amount;
     if (r.paymentSource === 'common') commonPaid += amount;
   }
   Object.values(rows).forEach(row => {
-    // 월회비 회원: 실제 이용액 - 해당 반기 실제 납부회비 - 개인 선결제액.
+    // 월회비 회원(정기모임만 해당): 실제 이용액 - 해당 반기 실제 납부회비 - 개인 선결제액.
     // 음수이면 납부한 금액이 더 많으므로 환급, 양수이면 추가 납부입니다.
-    row.net = row.type === 'monthly'
+    // 번개모임은 회원 유형과 무관하게 전원 이 공식(이용액-선결제액)을 씁니다.
+    row.net = (!isFlash && row.type === 'monthly')
       ? row.used - row.feePaid - row.advanced
       : row.personalDue - row.advanced;
   });
@@ -420,7 +432,7 @@ function setPage(page) {
 
 function renderEventSelector() {
   const sel = $('#eventSelector');
-  sel.innerHTML = state.events.slice().sort((a,b) => b.year-a.year || (a.season === 'winter' ? -1 : 1)).map(e => `<option value="${e.id}">${esc(e.title)}</option>`).join('');
+  sel.innerHTML = state.events.slice().sort((a,b) => b.year-a.year || (a.season==='winter'?-1:a.season==='summer'?1:0)).map(e => `<option value="${e.id}">${e.type==='flash'?'⚡ ':''}${esc(e.title)}</option>`).join('');
   sel.value = state.currentEventId || '';
 }
 
@@ -436,12 +448,12 @@ function emptyState(title, message, button = '') {
 
 function renderDashboard() {
   const e = currentEvent();
-  if (!e) { $('#content').innerHTML = emptyState('모임이 없습니다.', '하계 또는 동계 모임을 먼저 만들어 주세요.', '<button class="btn btn-primary" data-action="new-event">모임 만들기</button>'); bindCommonActions(); return; }
+  if (!e) { $('#content').innerHTML = emptyState('모임이 없습니다.', '하계·동계 정기모임 또는 번개모임을 먼저 만들어 주세요.', '<button class="btn btn-primary" data-action="new-event">모임 만들기</button>'); bindCommonActions(); return; }
   const recs = eventRecords(); const calc = calculateSettlement(e); const lodgers=lodgerIdsForEvent(e); const pct = e.attendeeIds.length ? Math.round((lodgers.length/e.attendeeIds.length)*100) : 0;
   const recent = recs.slice(-5).reverse();
   $('#content').innerHTML = `
     <section class="card hero">
-      <p class="eyebrow">${e.year} ${seasonName(e.season)} GATHERING</p>
+      <p class="eyebrow">${e.year} ${eventTypeLabel(e)} GATHERING</p>
       <h2>${esc(e.title)}</h2>
       <p>${dateText(e.startDate)} ~ ${dateText(e.endDate)} · ${esc(e.location || '장소를 입력해 주세요')}<br>지출 건마다 실제 이용자를 선택하고 영수증과 현장 사진을 함께 남기세요.</p>
       <div class="hero-actions"><button class="btn btn-primary" data-action="add-record">＋ 이용 기록 추가</button><button class="btn" data-page-jump="event">모임·참석자 설정</button><button class="btn" data-page-jump="report">보고서 보기</button><button class="btn" data-page-jump="backup">백업·설정</button></div>
@@ -616,18 +628,21 @@ function openBulkFeeModal(month=feeViewMonth) {
 
 function renderEvent() {
   const e=currentEvent(); if(!e){renderDashboard();return;}
+  const isFlash=e.type==='flash';
   $('#content').innerHTML=`
     <section class="card">
-      <div class="card-title-row"><div><h2>${esc(e.title)}</h2><div class="help">연 2회 하계·동계 모임을 관리합니다.</div></div><button class="btn" data-action="new-event">＋ 새 하계·동계 모임</button></div>
+      <div class="card-title-row"><div><h2>${esc(e.title)}</h2><div class="help">연 2회 하계·동계 정기모임과, 필요할 때마다 만드는 번개모임을 함께 관리합니다.</div></div><button class="btn" data-action="new-event">＋ 새 모임</button></div>
       <div class="form-grid">
         <div class="field"><label>모임명</label><input id="eventTitle" value="${esc(e.title)}"></div>
-        <div class="field"><label>구분</label><select id="eventSeason"><option value="summer" ${e.season==='summer'?'selected':''}>하계</option><option value="winter" ${e.season==='winter'?'selected':''}>동계</option></select></div>
+        <div class="field"><label>모임 종류</label><select id="eventType"><option value="regular" ${!isFlash?'selected':''}>정기모임(하계·동계)</option><option value="flash" ${isFlash?'selected':''}>번개모임</option></select></div>
+        ${isFlash?'':`<div class="field"><label>구분</label><select id="eventSeason"><option value="summer" ${e.season==='summer'?'selected':''}>하계</option><option value="winter" ${e.season==='winter'?'selected':''}>동계</option></select></div>`}
         <div class="field"><label>시작일</label><input id="eventStart" type="date" value="${e.startDate||''}"></div>
         <div class="field"><label>종료일</label><input id="eventEnd" type="date" value="${e.endDate||''}"></div>
         <div class="field"><label>지역·장소</label><input id="eventLocation" value="${esc(e.location||'')}" placeholder="예: 전주 한옥마을"></div>
         <div class="field"><label>상태</label><select id="eventStatus">${Object.entries(STATUS_LABEL).map(([k,v])=>`<option value="${k}" ${e.status===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="field field-full"><label>모임 메모</label><textarea id="eventNotes" placeholder="집결 장소, 준비물, 특이사항 등">${esc(e.notes||'')}</textarea></div>
       </div>
+      ${isFlash?'<div class="notice section-gap"><strong>번개모임 정산 안내</strong><br>번개모임은 정회비·공동회비와 완전히 분리됩니다. 참석자 전원이 그날 쓴 돈만 인원수대로 나눠 정산합니다.</div>':''}
     </section>
     <section class="card section-gap">
       <div class="card-title-row"><div><h2>전체 모임 참석자</h2><div class="help">중간 합류·조기 귀가 포함, 모임에 한 번이라도 참여하는 회원입니다.</div></div><button class="btn btn-sm" data-select-group="attendees">선택</button></div>
@@ -638,6 +653,7 @@ function renderEvent() {
   const fields=[['#eventTitle','title'],['#eventStart','startDate'],['#eventEnd','endDate'],['#eventLocation','location'],['#eventStatus','status'],['#eventNotes','notes']];
   fields.forEach(([sel,key])=>$(sel)?.addEventListener('change',ev=>{e[key]=ev.target.value; if(key==='startDate') e.year=Number(ev.target.value.slice(0,4))||e.year; queueSave();renderEventSelector()}));
   $('#eventSeason')?.addEventListener('change',ev=>{e.season=ev.target.value;queueSave()});
+  $('#eventType')?.addEventListener('change',ev=>{e.type=ev.target.value; if(e.type==='flash') e.season=''; else if(!e.season) e.season='summer'; queueSave();renderEventSelector();renderEvent()});
   $$('[data-select-group]').forEach(btn=>btn.addEventListener('click',()=>openGroupSelector(btn.dataset.selectGroup)));
 }
 function chipsHtml(ids, placeholder) { return ids?.length ? `<div class="member-list">${ids.map(id=>member(id)).filter(Boolean).map(m=>`<span class="member-chip selected">${esc(m.name)}</span>`).join('')}</div>` : `<div class="empty"><div>${esc(placeholder)}</div></div>`; }
@@ -663,23 +679,24 @@ function recordCard(r) {
 
 function renderSettlement() {
   const e=currentEvent(); const calc=calculateSettlement(e);
+  const isFlash=e?.type==='flash';
   const payers=calc.rows.filter(r=>r.net>0); const refunds=calc.rows.filter(r=>r.net<0);
   $('#content').innerHTML=`
     <section class="grid grid-4">
       <div class="card stat"><div class="stat-label">총지출</div><div class="stat-value">${money(calc.totalExpense)}</div></div>
-      <div class="card stat"><div class="stat-label">해당 모임 납부회비</div><div class="stat-value">${money(calc.eventFeePaid)}</div><div class="stat-sub">월회비 회원 ${feePeriodLabel(e)} 실제 납부액</div></div>
+      <div class="card stat"><div class="stat-label">해당 모임 납부회비</div><div class="stat-value">${money(calc.eventFeePaid)}</div><div class="stat-sub">${isFlash?'번개모임은 회비 정산 대상 아님':`월회비 회원 ${feePeriodLabel(e)} 실제 납부액`}</div></div>
       <div class="card stat"><div class="stat-label">추가 납부 대상</div><div class="stat-value">${payers.length}명</div><div class="stat-sub">${money(payers.reduce((s,r)=>s+r.net,0))}</div></div>
       <div class="card stat"><div class="stat-label">환급 대상</div><div class="stat-value">${refunds.length}명</div><div class="stat-sub">${money(Math.abs(refunds.reduce((s,r)=>s+r.net,0)))}</div></div>
     </section>
     <section class="card section-gap">
-      <div class="card-title-row"><div><h2>개인별 정산 결과</h2><div class="help">월회비 회원은 ${feePeriodLabel(e)} 실제 납부회비에서 이용액을 정산합니다. 최종값이 음수이면 환급, 양수이면 추가 납부입니다. 개인 선결제액도 환급에 반영됩니다.</div></div><button class="btn" data-page-jump="report">보고서로 보기</button></div>
-      ${calc.rows.length?`<div class="table-wrap"><table><thead><tr><th>회원</th><th>유형</th><th class="num">실제 이용액</th><th class="num">해당 모임 회비</th><th class="num">선결제</th><th class="num">최종 결과</th></tr></thead><tbody>${calc.rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong></td><td><span class="badge ${r.type==='monthly'?'primary':'dark'}">${r.type==='monthly'?'월회비':'모임별'}</span></td><td class="num">${money(r.used)}</td><td class="num">${r.type==='monthly'?money(r.feePaid):'-'}</td><td class="num">${money(r.advanced)}</td><td class="num"><strong style="color:${r.net>0?'#c04557':r.net<0?'#168163':'#596174'}">${settlementResultText(r)}</strong></td></tr>`).join('')}</tbody></table></div>`:emptyState('정산 대상이 없습니다.','참석자와 이용 기록을 먼저 등록해 주세요.')}
+      <div class="card-title-row"><div><h2>개인별 정산 결과</h2><div class="help">${isFlash?'번개모임은 회원 유형과 무관하게 전원 그날 쓴 돈에서 선결제액을 뺀 값으로 정산합니다.':`월회비 회원은 ${feePeriodLabel(e)} 실제 납부회비에서 이용액을 정산합니다.`} 최종값이 음수이면 환급, 양수이면 추가 납부입니다. 개인 선결제액도 환급에 반영됩니다.</div></div><button class="btn" data-page-jump="report">보고서로 보기</button></div>
+      ${calc.rows.length?`<div class="table-wrap"><table><thead><tr><th>회원</th><th>유형</th><th class="num">실제 이용액</th><th class="num">해당 모임 회비</th><th class="num">선결제</th><th class="num">최종 결과</th></tr></thead><tbody>${calc.rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong></td><td><span class="badge ${r.type==='monthly'?'primary':'dark'}">${r.type==='monthly'?'월회비':'모임별'}</span></td><td class="num">${money(r.used)}</td><td class="num">${(!isFlash&&r.type==='monthly')?money(r.feePaid):'-'}</td><td class="num">${money(r.advanced)}</td><td class="num"><strong style="color:${r.net>0?'#c04557':r.net<0?'#168163':'#596174'}">${settlementResultText(r)}</strong></td></tr>`).join('')}</tbody></table></div>`:emptyState('정산 대상이 없습니다.','참석자와 이용 기록을 먼저 등록해 주세요.')}
     </section>
     <section class="grid grid-2 section-gap">
       <div class="card"><div class="card-title-row"><h2>추가 납부할 회원</h2></div>${payers.length?`<div class="list">${payers.map(r=>`<div class="list-item"><strong>${esc(r.name)}</strong><strong style="color:#c04557">${money(r.net)}</strong></div>`).join('')}</div>`:emptyState('납부 대상이 없습니다.','')}</div>
       <div class="card"><div class="card-title-row"><h2>환급할 회원</h2></div>${refunds.length?`<div class="list">${refunds.map(r=>`<div class="list-item"><strong>${esc(r.name)}</strong><strong style="color:#168163">${money(Math.abs(r.net))}</strong></div>`).join('')}</div>`:emptyState('환급 대상이 없습니다.','')}</div>
     </section>
-    <section class="card section-gap"><div class="notice warn"><strong>정산 기준</strong><br>하계는 2~7월, 동계는 8월~다음 해 1월의 실제 납부 완료 회비만 반영합니다. 미납 처리된 금액은 제외됩니다. 숙박비는 실제 숙박자, 음식점·마트·택시는 당시 이용자만 선택했는지 확인하세요.</div></section>`;
+    <section class="card section-gap"><div class="notice warn"><strong>정산 기준</strong><br>${isFlash?'번개모임은 참석자 전원이 그날 쓴 돈만 인원수대로 나눠 정산합니다. 정회비·공동회비는 전혀 반영되지 않습니다.':'하계는 2~7월, 동계는 8월~다음 해 1월의 실제 납부 완료 회비만 반영합니다. 미납 처리된 금액은 제외됩니다.'} 숙박비는 실제 숙박자, 음식점·마트·택시는 당시 이용자만 선택했는지 확인하세요.</div></section>`;
   bindCommonActions();
 }
 
@@ -823,8 +840,30 @@ function openBulkMemberModal() {
 
 function openNewEventModal() {
   const year=new Date().getFullYear();
-  openModal({title:'새 하계·동계 모임',body:`<div class="form-grid"><div class="field"><label>연도</label><input id="newEventYear" type="number" value="${year}"></div><div class="field"><label>구분</label><select id="newEventSeason"><option value="summer">하계</option><option value="winter">동계</option></select></div><div class="field"><label>시작일</label><input id="newEventStart" type="date"></div><div class="field"><label>종료일</label><input id="newEventEnd" type="date"></div></div>`,footer:`<button class="btn" id="cancelModal">취소</button><button class="btn btn-primary" id="createEventBtn">만들기</button>`,onOpen:root=>{
-    $('#cancelModal',root).onclick=closeModal; $('#createEventBtn',root).onclick=()=>{const y=Number($('#newEventYear',root).value)||year;const s=$('#newEventSeason',root).value;const evt={id:uid('evt'),year:y,season:s,title:`${y}년 ${seasonName(s)} 모임`,startDate:$('#newEventStart',root).value,endDate:$('#newEventEnd',root).value,location:'',status:'preparing',attendeeIds:[],lodgerIds:[],notes:'',createdAt:new Date().toISOString()};state.events.push(evt);state.currentEventId=evt.id;queueSave();closeModal();setPage('event')};
+  openModal({title:'새 모임 만들기',body:`<div class="form-grid">
+    <div class="field"><label>모임 종류</label><select id="newEventType"><option value="regular">정기모임(하계·동계)</option><option value="flash">번개모임</option></select></div>
+    <div class="field"><label>연도</label><input id="newEventYear" type="number" value="${year}"></div>
+    <div class="field" id="newEventSeasonField"><label>구분</label><select id="newEventSeason"><option value="summer">하계</option><option value="winter">동계</option></select></div>
+    <div class="field" id="newEventFlashNameField" style="display:none"><label>모임 이름</label><input id="newEventFlashName" placeholder="예: 8월 번개 모임"></div>
+    <div class="field"><label>시작일</label><input id="newEventStart" type="date"></div>
+    <div class="field"><label>종료일</label><input id="newEventEnd" type="date"></div>
+    </div>`,footer:`<button class="btn" id="cancelModal">취소</button><button class="btn btn-primary" id="createEventBtn">만들기</button>`,onOpen:root=>{
+    $('#cancelModal',root).onclick=closeModal;
+    $('#newEventType',root).onchange=ev=>{
+      const isFlash=ev.target.value==='flash';
+      $('#newEventSeasonField',root).style.display=isFlash?'none':'';
+      $('#newEventFlashNameField',root).style.display=isFlash?'':'none';
+    };
+    $('#createEventBtn',root).onclick=()=>{
+      const y=Number($('#newEventYear',root).value)||year;
+      const type=$('#newEventType',root).value;
+      const isFlash=type==='flash';
+      const s=isFlash?'':$('#newEventSeason',root).value;
+      const flashName=$('#newEventFlashName',root).value.trim();
+      const title=isFlash?(flashName||`${y}년 번개모임`):`${y}년 ${seasonName(s)} 모임`;
+      const evt={id:uid('evt'),year:y,season:s,type,title,startDate:$('#newEventStart',root).value,endDate:$('#newEventEnd',root).value,location:'',status:'preparing',attendeeIds:[],lodgerIds:[],notes:'',createdAt:new Date().toISOString()};
+      state.events.push(evt);state.currentEventId=evt.id;queueSave();closeModal();setPage('event');
+    };
   }});
 }
 
@@ -968,7 +1007,7 @@ async function buildReportHtml() {
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(e.title)} 정산 보고서</title><style>
   @page{size:A4;margin:14mm}*{box-sizing:border-box}body{font-family:"Malgun Gothic",Arial,sans-serif;color:#182033;margin:0;line-height:1.55}header.cover{min-height:250mm;display:flex;flex-direction:column;justify-content:flex-end;page-break-after:always;background:#172033;color:#fff;padding:22mm;position:relative;overflow:hidden}.cover:after{content:"";position:absolute;width:150mm;height:150mm;border-radius:50%;right:-55mm;top:-55mm;background:linear-gradient(135deg,#5975ff,#28aa9c);opacity:.55}.cover .cover-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.35}.cover>div{position:relative;z-index:2}.cover h1{font-size:34pt;margin:0 0 8px}.cover p{font-size:13pt;color:#dbe2f4}.tag{font-size:10pt;letter-spacing:.15em;color:#aebcff;font-weight:bold}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 20px}.kpi{border:1px solid #dfe4ed;border-radius:12px;padding:12px}.kpi small{display:block;color:#6f7788}.kpi strong{display:block;font-size:17pt;margin-top:5px}.section-title{font-size:19pt;margin:0 0 14px;border-bottom:3px solid #526df5;padding-bottom:7px}.overview{page-break-after:always}table{width:100%;border-collapse:collapse;font-size:9.5pt}th,td{border-bottom:1px solid #e5e8ef;padding:8px;text-align:left}th{background:#f4f6fa}.num{text-align:right}.record{page-break-inside:avoid;border:1px solid #dfe4ed;border-radius:14px;padding:15px;margin:0 0 16px}.record-head{display:flex;justify-content:space-between;gap:12px}.record-head h2{margin:4px 0;font-size:17pt}.record-head p{margin:0;color:#6f7788}.cat{font-size:9pt;color:#526df5;font-weight:bold}.amount{font-size:17pt;font-weight:bold;white-space:nowrap}.details{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;font-size:9.5pt;color:#4e5769}.desc{background:#f6f7fa;padding:10px;border-radius:9px}.photos{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.photos.one{grid-template-columns:1fr}.photos img{width:100%;height:68mm;object-fit:cover;border-radius:9px}.no-photo{color:#9aa1af;background:#f7f8fa;padding:16px;text-align:center;border-radius:9px}.receipt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.receipt{border:1px solid #dfe4ed;border-radius:9px;padding:6px;page-break-inside:avoid}.receipt img{width:100%;height:75mm;object-fit:contain}.receipt small{display:block;color:#6f7788;word-break:break-all}.receipt.pdf{height:40mm;display:grid;place-items:center}.page-break{page-break-before:always}.printbar{position:fixed;top:10px;right:10px;z-index:99}@media print{.printbar{display:none}}@media(max-width:700px){.summary{grid-template-columns:repeat(2,1fr)}.photos,.receipt-grid{grid-template-columns:1fr}header.cover{min-height:100vh}}
   </style></head><body><button class="printbar" onclick="window.print()">인쇄 · PDF 저장</button><header class="cover">${coverId?`<img class="cover-photo" src="${imageMap[coverId]||attachment(coverId)?.url}">`:''}<div><div class="tag">ROSA GATHER LEDGER</div><h1>${esc(e.title)}</h1><p>${dateText(e.startDate)} ~ ${dateText(e.endDate)}<br>${esc(e.location||'')}</p></div></header>
-  <section class="overview"><h1 class="section-title">모임 및 정산 개요</h1><div class="summary"><div class="kpi"><small>전체 지출</small><strong>${money(calc.totalExpense)}</strong></div><div class="kpi"><small>참석자</small><strong>${e.attendeeIds.length}명</strong></div><div class="kpi"><small>숙박자</small><strong>${lodgers.length}명</strong></div><div class="kpi"><small>공동회비 부담</small><strong>${money(calc.commonBurden)}</strong></div></div><h2>참석자</h2><p>${esc(memberNames(e.attendeeIds).join(', ')||'-')}</p><h2>실제 숙박자</h2><p>${esc(memberNames(lodgers).join(', ')||'-')}</p><h2>지출 분류별 요약</h2><table><thead><tr><th>분류</th><th class="num">금액</th></tr></thead><tbody>${Object.entries(calc.categoryTotals).map(([k,v])=>`<tr><td>${CATEGORY[k]?.icon||''} ${CATEGORY[k]?.label||k}</td><td class="num">${money(v)}</td></tr>`).join('')}</tbody></table><h2>개인별 정산</h2><p style="font-size:9pt;color:#6f7788">월회비 회원은 ${feePeriodLabel(e)} 실제 납부회비를 반영합니다. 음수 결과는 환급입니다.</p><table><thead><tr><th>회원</th><th>유형</th><th class="num">이용액</th><th class="num">납부회비</th><th class="num">선결제</th><th class="num">최종</th></tr></thead><tbody>${calc.rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.type==='monthly'?'월회비':'모임별'}</td><td class="num">${money(r.used)}</td><td class="num">${r.type==='monthly'?money(r.feePaid):'-'}</td><td class="num">${money(r.advanced)}</td><td class="num">${settlementResultText(r)}</td></tr>`).join('')}</tbody></table></section>
+  <section class="overview"><h1 class="section-title">모임 및 정산 개요</h1><div class="summary"><div class="kpi"><small>전체 지출</small><strong>${money(calc.totalExpense)}</strong></div><div class="kpi"><small>참석자</small><strong>${e.attendeeIds.length}명</strong></div><div class="kpi"><small>숙박자</small><strong>${lodgers.length}명</strong></div><div class="kpi"><small>공동회비 부담</small><strong>${money(calc.commonBurden)}</strong></div></div><h2>참석자</h2><p>${esc(memberNames(e.attendeeIds).join(', ')||'-')}</p><h2>실제 숙박자</h2><p>${esc(memberNames(lodgers).join(', ')||'-')}</p><h2>지출 분류별 요약</h2><table><thead><tr><th>분류</th><th class="num">금액</th></tr></thead><tbody>${Object.entries(calc.categoryTotals).map(([k,v])=>`<tr><td>${CATEGORY[k]?.icon||''} ${CATEGORY[k]?.label||k}</td><td class="num">${money(v)}</td></tr>`).join('')}</tbody></table><h2>개인별 정산</h2><p style="font-size:9pt;color:#6f7788">${e.type==='flash'?'번개모임은 회원 유형과 무관하게 전원 그날 쓴 돈에서 선결제액을 뺀 값으로 정산합니다.':`월회비 회원은 ${feePeriodLabel(e)} 실제 납부회비를 반영합니다.`} 음수 결과는 환급입니다.</p><table><thead><tr><th>회원</th><th>유형</th><th class="num">이용액</th><th class="num">납부회비</th><th class="num">선결제</th><th class="num">최종</th></tr></thead><tbody>${calc.rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.type==='monthly'?'월회비':'모임별'}</td><td class="num">${money(r.used)}</td><td class="num">${(e.type!=='flash'&&r.type==='monthly')?money(r.feePaid):'-'}</td><td class="num">${money(r.advanced)}</td><td class="num">${settlementResultText(r)}</td></tr>`).join('')}</tbody></table></section>
   <section><h1 class="section-title">장소별 이용 기록</h1>${recordSections||'<p>등록된 이용 기록이 없습니다.</p>'}</section><section class="page-break"><h1 class="section-title">영수증·증빙 부록</h1><div class="receipt-grid">${receipts||'<p>등록된 영수증이 없습니다.</p>'}</div></section></body></html>`;
 }
 
@@ -1020,7 +1059,7 @@ async function buildKakaoCanvas(includePhotos=false) {
   drawKakaoMetric(ctx,64,y,mw,'전체 지출',money(calc.totalExpense));drawKakaoMetric(ctx,64+(mw+gap),y,mw,'참석자',`${e?.attendeeIds?.length||0}명`);drawKakaoMetric(ctx,64+2*(mw+gap),y,mw,'숙박자',`${lodgers.length}명`);drawKakaoMetric(ctx,64+3*(mw+gap),y,mw,'반기 납부회비',money(calc.eventFeePaid));y+=176;
   y=drawKakaoSectionTitle(ctx,'지출 분류별 요약',y);if(categories.length){categories.forEach(([key,value])=>{canvasText(ctx,`${CATEGORY[key]?.icon||'•'} ${CATEGORY[key]?.label||key}`,78,y+13,{font:'500 23px "Malgun Gothic",sans-serif'});canvasText(ctx,money(value),1002,y+13,{font:'700 23px "Malgun Gothic",sans-serif',align:'right'});ctx.fillStyle='#e8ebf1';ctx.fillRect(64,y+55,952,1);y+=58})}else{canvasText(ctx,'등록된 지출이 없습니다.',78,y+12,{font:'500 23px "Malgun Gothic",sans-serif',color:'#8b93a2'});y+=58}
   y+=18;y=drawKakaoSectionTitle(ctx,`개인별 정산 · 월회비 ${feePeriodLabel(e)} 반영`,y);const widths=[150,110,160,180,150,202];y=drawKakaoTableHeader(ctx,['회원','유형','이용액','납부회비','선결제','최종'],y,widths);
-  calc.rows.forEach((r,idx)=>{if(idx%2===1){ctx.fillStyle='#fafbfc';ctx.fillRect(64,y,952,68)}let x=64;const vals=[r.name,r.type==='monthly'?'월회비':'모임별',money(r.used),r.type==='monthly'?money(r.feePaid):'-',money(r.advanced),settlementResultText(r)];vals.forEach((v,i)=>{canvasText(ctx,v,x+(i>=2?widths[i]-12:12),y+20,{font:`${i===5?'700':'500'} 21px "Malgun Gothic",sans-serif`,color:i===5?resultColor(r):'#263044',align:i>=2?'right':'left'});x+=widths[i]});ctx.fillStyle='#e8ebf1';ctx.fillRect(64,y+67,952,1);y+=68});
+  calc.rows.forEach((r,idx)=>{if(idx%2===1){ctx.fillStyle='#fafbfc';ctx.fillRect(64,y,952,68)}let x=64;const vals=[r.name,r.type==='monthly'?'월회비':'모임별',money(r.used),(e.type!=='flash'&&r.type==='monthly')?money(r.feePaid):'-',money(r.advanced),settlementResultText(r)];vals.forEach((v,i)=>{canvasText(ctx,v,x+(i>=2?widths[i]-12:12),y+20,{font:`${i===5?'700':'500'} 21px "Malgun Gothic",sans-serif`,color:i===5?resultColor(r):'#263044',align:i>=2?'right':'left'});x+=widths[i]});ctx.fillStyle='#e8ebf1';ctx.fillRect(64,y+67,952,1);y+=68});
   if(!calc.rows.length){canvasText(ctx,'정산 대상이 없습니다.',78,y+20,{font:'500 23px "Malgun Gothic",sans-serif',color:'#8b93a2'});y+=68}
   canvasRoundRect(ctx,64,y+22,952,78,16,'#f2f5ff');canvasText(ctx,`계산 기준: 월회비 회원은 실제 이용액 - ${feePeriodLabel(e)} 납부회비 - 개인 선결제액`,86,y+43,{font:'500 22px "Malgun Gothic",sans-serif',color:'#455584'});canvasText(ctx,'결과가 음수이면 환급, 양수이면 추가 납부입니다.',86,y+72,{font:'700 22px "Malgun Gothic",sans-serif',color:'#35487c'});y+=128;
   if(includePhotos){
